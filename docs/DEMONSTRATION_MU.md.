@@ -1,0 +1,156 @@
+# Démonstration énergétique de μ = 0
+
+## 1. Objet
+
+Ce document expose le raisonnement mathématique consigné dans la sauvegarde DODECA du 21 novembre 2026.
+
+La conclusion annoncée est :
+
+\[
+\boxed{\mu=0}.
+\]
+
+Le résultat repose sur la construction d'un état admissible non nul d'énergie quadratique nulle, et sur les propriétés de positivité des formes intervenant dans le quotient énergétique.
+
+## 2. Identité fondamentale
+
+Les matrices considérées vérifient l'identité :
+
+\[
+A=D+\frac15B,
+\]
+
+ou, de manière équivalente,
+
+\[
+D=A-\frac15B.
+\]
+
+Le problème spectral généralisé est formulé pour la paire \((D,B)\).
+
+## 3. Spectre généralisé rapporté
+
+Le spectre généralisé consigné est :
+
+\[
+\operatorname{Spec}(D,B)
+=
+\left\{
+-\frac15\ (4),
+\frac3{10},
+\frac45
+\right\}.
+\]
+
+Par l'identité \(A=D+\frac15B\), le spectre correspondant de la paire \((A,B)\) est rapporté comme étant :
+
+\[
+\operatorname{Spec}(A,B)
+=
+\left\{
+0\ (4),
+\frac12,
+1
+\right\}.
+\]
+
+La multiplicité quatre de la valeur propre nulle indique l'existence d'un noyau de dimension quatre dans la formulation spectrale considérée, sous réserve de la non-dégénérescence de B.
+
+Le certificat spectral exact doit être fourni dans `certificates/certificat_spectral/`.
+
+## 4. Conditions de positivité
+
+Le raisonnement utilise les propriétés suivantes :
+
+\[
+B\succ0,
+\]
+
+et, sur le domaine admissible :
+
+\[
+A\succeq0.
+\]
+
+La positivité définie de B garantit notamment que le quotient énergétique possède un dénominateur strictement positif pour tout état non nul du domaine considéré.
+
+La positivité semi-définie de A garantit que le numérateur ne peut pas être négatif.
+
+Ces deux affirmations doivent être accompagnées de leurs certificats exacts.
+
+## 5. Construction de l'état admissible
+
+Le point décisif est l'existence d'un état \(x_0\) tel que :
+
+\[
+x_0\ne0,
+\]
+
+\[
+x_0\in S_\mu,
+\]
+
+et
+
+\[
+Ax_0=0.
+\]
+
+Autrement dit :
+
+\[
+x_0\in\ker(A)\cap S_\mu.
+\]
+
+L'appartenance à \(S_\mu\) doit être démontrée à partir de sa définition exacte, et non déduite de la seule appartenance au noyau.
+
+Il faut également établir :
+
+\[
+x_0^{T}Bx_0>0.
+\]
+
+## 6. Conséquence énergétique
+
+Pour cet état :
+
+\[
+x_0^TAx_0=0.
+\]
+
+Le quotient énergétique correspondant est donc :
+
+\[
+\frac{x_0^TAx_0}{x_0^TBx_0}=0.
+\]
+
+Puisque B est définie positive et que A est positive ou nulle sur le domaine admissible, le quotient est non négatif pour tout état admissible non nul.
+
+L'existence de \(x_0\) donne alors une valeur atteinte égale à zéro :
+
+\[
+\boxed{\mu=0}.
+\]
+
+## 7. Pièces nécessaires à la vérification indépendante
+
+La démonstration doit être accompagnée des éléments suivants :
+
+1. Définition complète de \(S_\mu\).
+2. Définition exacte des matrices A, B et D.
+3. Vérification exacte de \(A=D+\frac15B\).
+4. Certificat du spectre généralisé de \((D,B)\).
+5. Certificat de \(B\succ0\).
+6. Certificat de \(A\succeq0\) sur le domaine annoncé.
+7. Vecteur exact non nul \(x_0\) et vérification de \(Ax_0=0\).
+8. Vérification de \(x_0\in S_\mu\).
+9. Vérification de \(x_0^TBx_0>0\).
+10. Raccord exact entre les matrices et le quotient énergétique initial.
+
+## 8. Portée de la conclusion
+
+La conclusion μ = 0 est celle consignée dans la sauvegarde du 21 novembre 2026.
+
+La présente note expose le raisonnement et identifie les certificats qui doivent permettre à un lecteur de le contrôler indépendamment. Elle ne prétend pas que ces certificats sont tous déjà inclus dans le présent dépôt.
+
+Une ancienne étape du programme avait laissé ouverte la borne μ ≥ 1/5. Cette étape historique doit être conservée dans la chronologie. La conclusion ultérieure μ = 0 doit être documentée par les pièces qui établissent l'état admissible dans le noyau.
