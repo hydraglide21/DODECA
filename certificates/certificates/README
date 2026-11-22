@@ -1,0 +1,147 @@
+# CERTIFICATS MATHÉMATIQUES — DODECA
+
+## 1. Objet
+
+Ce dossier rassemble les certificats primaires permettant de vérifier indépendamment la démonstration de :
+
+\[
+\boxed{\mu=0}
+\]
+
+La démonstration repose sur la positivité de la forme énergétique et l'existence d'un état admissible non nul appartenant au noyau de la matrice \(A\).
+
+Le présent document constitue un inventaire des pièces nécessaires. Il ne remplace pas les certificats eux-mêmes.
+
+## 2. Résultat central consigné
+
+La sauvegarde `SAUVEGARDE_DODECA_MU_V2.py` consigne l'identité :
+
+\[
+A=D+\frac15B
+\]
+
+et le spectre généralisé rapporté de la paire \((D,B)\) :
+
+\[
+\left\{-\frac15\ (4),\quad \frac3{10},\quad \frac45\right\}.
+\]
+
+Le spectre correspondant rapporté de \((A,B)\) est :
+
+\[
+\left\{0\ (4),\quad \frac12,\quad 1\right\}.
+\]
+
+La sauvegarde rapporte également :
+
+- \(B\succ0\) ;
+- \(A\succeq0\) sur le domaine admissible ;
+- l'existence d'un état admissible non nul \(x_0\) tel que \(Ax_0=0\).
+
+Ces éléments sont consignés comme résultats du projet. Leur vérification indépendante nécessite les pièces détaillées ci-dessous.
+
+## 3. Certificats primaires attendus
+
+### C01 — Définition du domaine admissible
+
+Définition exacte de \(S_\mu\), de ses contraintes et de ses conditions d'admissibilité.
+
+### C02 — Construction des matrices
+
+Définition exacte des matrices \(A\), \(B\) et \(D\), ainsi que vérification de :
+
+\[
+A=D+\frac15B.
+\]
+
+### C03 — Certificat spectral
+
+Calcul exact du spectre généralisé de \((D,B)\), avec multiplicités et corps de calcul explicités.
+
+### C04 — Positivité de B
+
+Preuve exacte de :
+
+\[
+B\succ0.
+\]
+
+### C05 — Positivité de A
+
+Preuve exacte de :
+
+\[
+A\succeq0
+\]
+
+sur l'ensemble du domaine admissible considéré.
+
+### C06 — État du noyau
+
+Construction explicite d'un vecteur ou sous-espace non nul vérifiant :
+
+\[
+Ax_0=0.
+\]
+
+### C07 — Admissibilité de l'état
+
+Preuve que :
+
+\[
+x_0\in S_\mu
+\]
+
+et que :
+
+\[
+x_0^TBx_0>0.
+\]
+
+### C08 — Raccord énergétique
+
+Justification exacte du lien entre les matrices, les formes énergétiques \(E_1\) et \(H\), le domaine \(S_\mu\) et le quotient utilisé pour définir \(\mu\).
+
+## 4. Chaîne logique de la démonstration
+
+Sous réserve de la vérification des certificats :
+
+1. \(B\succ0\) garantit un dénominateur strictement positif pour tout état non nul.
+2. \(A\succeq0\) sur le domaine admissible garantit la non-négativité du quotient.
+3. L'existence d'un état admissible non nul \(x_0\in\ker(A)\) donne un numérateur nul.
+4. Le quotient atteint donc zéro.
+
+On obtient alors :
+
+\[
+\boxed{\mu=0}.
+\]
+
+## 5. Distinction des résultats
+
+Les éléments suivants doivent rester distincts :
+
+- démonstration mathématique ;
+- certificat symbolique exact ;
+- vérification numérique ;
+- rapport d'exécution informatique ;
+- photographie de sauvegarde du projet.
+
+Un rapport d'exécution ne remplace pas une preuve mathématique. Une sauvegarde ne remplace pas les certificats primaires.
+
+## 6. Règle de conservation
+
+Chaque certificat doit être conservé dans sa version originale, avec :
+
+- son nom ;
+- sa date ;
+- sa version ;
+- son empreinte SHA-256 ;
+- les hypothèses exactes utilisées ;
+- son statut de vérification.
+
+Aucun certificat historique ne doit être écrasé par une version ultérieure.
+
+---
+
+**Fin de l'inventaire des certificats DODECA.**
