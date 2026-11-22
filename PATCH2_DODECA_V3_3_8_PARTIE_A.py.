@@ -1,0 +1,256 @@
+
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+DODECA — PATCH V3.3.8 — PARTIE A
+
+Création d'une nouvelle version à partir de V3.3.7.
+
+Garanties :
+- V3.3.7 conservée intégralement ;
+- aucun écrasement ;
+- corrections strictement contrôlées par nombre d'occurrences ;
+- contrôle exact de symétrie avant LDL ;
+- rejet des booléens comme indices entiers ;
+- rapport SHA-256 ;
+- compilation syntaxique uniquement ;
+- aucun calcul scientifique exécuté.
+
+Usage :
+python PATCH_DODECA_V3_3_8_PARTIE_A.py \
+DODECA_BORNE_ENERGETIQUE_EXACTE_V3_3_7_PARTIE_A.py
+"""
+
+from pathlib import Path
+import hashlib
+import sys
+
+
+SOURCE = "DODECA_BORNE_ENERGETIQUE_EXACTE_V3_3_7_PARTIE_A.py"
+DESTINATION = "DODECA_BORNE_ENERGETIQUE_EXACTE_V3_3_8_PARTIE_A.py"
+
+
+def replace_checked(text, old, new, count, label):
+    found = text.count(old)
+
+    if found != count:
+        raise RuntimeError(
+            f"{label} : {found} occurrence(s) trouvée(s), "
+            f"{count} attendue(s). Abandon sans création."
+        )
+
+    return text.replace(old, new)
+
+
+def patch(text):
+    changes = []
+
+    # ---------------------------------------------------------
+    # 1. Correction des accès au nom de classe
+    # ---------------------------------------------------------
+
+    corrections_types = [
+        ("type(v).name", "type(v).__name__", 1, "type-v"),
+        ("type(e).name", "type(e).__name__", 3, "type-e"),
+        ("type(arr).name", "type(arr).__name__", 1, "type-arr"),
+    ]
+
+    for old, new, count, label in corrections_types:
+        text = replace_checked(text, old, new, count, label)
+        changes.append(label)
+
+    # ---------------------------------------------------------
+    # 2. Symétrie exacte obligatoire avant LDL
+    # ---------------------------------------------------------
+
+    old = '''def ldl_with_pivot(D):
+    if not est_carree(D):
+        return {"statut":"INDECIS","perm":[],"L":[],"diag":[],"contre_exemple":None,"k_arret":0,"attendu":None,
+        "factorisation":"aucune","verification":(False,"D non carrée"),"raison":"D non carrée."}
+    n=len(D);'''
+
+    new = '''def ldl_with_pivot(D):
+    if not est_carree(D):
+        return {"statut":"INDECIS","perm":[],"L":[],"diag":[],"contre_exemple":None,"k_arret":0,"attendu":None,
+        "factorisation":"aucune","verification":(False,"D non carrée"),"raison":"D non carrée."}
+    if not verifier_symetrie(D):
+        return {"statut":"INDECIS","perm":[],"L":[],"diag":[],"contre_exemple":None,"k_arret":0,"attendu":None,
+        "factorisation":"aucune","verification":(False,"D non symétrique"),
+        "raison":"Matrice non symétrique : LDL refusé."}
+    n=len(D);'''
+
+    text = replace_checked(
+        text, old, new, 1, "ldl-symetrie"
+    )
+    changes.append("ldl-symetrie")
+
+    # ---------------------------------------------------------
+    # 3. Même précondition dans l'audit LDL
+    # ---------------------------------------------------------
+
+    old = '''def ldl_audit(D,ldl_res):
+    if not est_carree(D): return (False,"audit : D non carrée.")
+    n=len(D);'''
+
+    new = '''def ldl_audit(D,ldl_res):
+    if not est_carree(D): return (False,"audit : D non carrée.")
+    if not verifier_symetrie(D):
+        return (False,"audit : D non symétrique, LDL refusé.")
+    n=len(D);'''
+
+    text = replace_checked(
+        text, old, new, 1, "audit-symetrie"
+    )
+    changes.append("audit-symetrie")
+
+    # ---------------------------------------------------------
+    # 4. Indices spectraux : int strict, bool refusé
+    # ---------------------------------------------------------
+
+    old = '''    for a in idx:
+        if a is None or a<0 or a>=len(vs): return (False,f"indice spectral invalide : {a}.")'''
+
+    new = '''    for a in idx:
+        if type(a) is not int or a<0 or a>=len(vs):
+            return (False,f"indice spectral invalide ou non entier strict : {a!r}.")'''
+
+    text = replace_checked(
+        text, old, new, 1, "indices-stricts"
+    )
+    changes.append("indices-stricts")
+
+    # ---------------------------------------------------------
+    # 5. Indices des cubes : bool refusé
+    # ---------------------------------------------------------
+
+    old = '''    r["cubes_indices_valides"]=all(all(isinstance(v,int) and 0<=v<20 for v in C[c]) for c in range(5))'''
+
+    new = '''    r["cubes_indices_valides"]=all(all(type(v) is int and 0<=v<20 for v in C[c]) for c in range(5))'''
+
+    text = replace_checked(
+        text, old, new, 1, "cubes-stricts"
+    )
+    changes.append("cubes-stricts")
+
+    # ---------------------------------------------------------
+    # 6. Extrémités et numéro de cube : int strict
+    # ---------------------------------------------------------
+
+    old = '''    r["endpoints_distincts_valides"]=all(isinstance(a,int) and isinstance(b,int) and 0<=a<20 and 0<=b<20 and a!=b and 1<=cu<=5 for (a,b,cu) in bars)'''
+
+    new = '''    r["endpoints_distincts_valides"]=all(type(a) is int and type(b) is int and type(cu) is int and 0<=a<20 and 0<=b<20 and a!=b and 1<=cu<=5 for (a,b,cu) in bars)'''
+
+    text = replace_checked(
+        text, old, new, 1, "aretes-strictes"
+    )
+    changes.append("aretes-strictes")
+
+    return text, changes
+
+
+def main():
+
+    if len(sys.argv) != 2:
+        print(
+            "Usage : python PATCH_DODECA_V3_3_8_PARTIE_A.py "
+            "fichier_source.py"
+        )
+        return 2
+
+    source = Path(sys.argv[1]).resolve()
+
+    if not source.is_file() or source.name != SOURCE:
+        print("ERREUR : fichier source V3.3.7 attendu.")
+        return 2
+
+    destination = source.with_name(DESTINATION)
+
+    if destination.exists():
+        print(
+            "ERREUR : la V3.3.8 existe déjà. "
+            "Aucun écrasement effectué."
+        )
+        return 2
+
+    try:
+        original_bytes = source.read_bytes()
+        original = original_bytes.decode("utf-8")
+
+        modified, changes = patch(original)
+
+        # Compilation syntaxique uniquement.
+        # Le module n'est ni importé ni exécuté.
+        compile(
+            modified,
+            str(destination),
+            "exec"
+        )
+
+        modified_bytes = modified.encode("utf-8")
+
+        # Vérification supplémentaire avant écriture.
+        if destination.exists():
+            raise RuntimeError(
+                "La destination est apparue entre-temps. "
+                "Abandon."
+            )
+
+        destination.write_bytes(modified_bytes)
+
+        sha_source = hashlib.sha256(
+            original_bytes
+        ).hexdigest()
+
+        sha_new = hashlib.sha256(
+            modified_bytes
+        ).hexdigest()
+
+        report = destination.with_suffix(".rapport.txt")
+
+        report_content = (
+            "DODECA — RAPPORT PATCH V3.3.8\n"
+            "================================\n\n"
+            f"Source : {source.name}\n"
+            f"Sortie : {destination.name}\n"
+            f"Taille source : {len(original_bytes)} octets\n"
+            f"Taille sortie : {len(modified_bytes)} octets\n"
+            f"SHA256 source : {sha_source}\n"
+            f"SHA256 sortie : {sha_new}\n\n"
+            "Compilation syntaxique : OK\n"
+            "Import du module : NON EFFECTUÉ\n"
+            "Exécution scientifique : NON EFFECTUÉE\n\n"
+            "Modifications :\n"
+            + "".join(f"- {c}\n" for c in changes)
+            + "\nPoints restant ouverts :\n"
+            "- Contrat de validation des rotations à préciser.\n"
+            "- Rigueur mathématique de la borne d'arrondi à réexaminer.\n"
+            "- Tests fonctionnels LDL à effectuer séparément.\n"
+            "- Compatibilité B1/B2 à vérifier avant tout changement d'import.\n"
+            "- V3.3.7 conservée comme référence historique.\n"
+        )
+
+        report.write_text(
+            report_content,
+            encoding="utf-8"
+        )
+
+    except Exception as exc:
+        print("ÉCHEC DU PATCH :", repr(exc))
+        print("Aucune validation scientifique revendiquée.")
+        return 1
+
+    print("PATCH TERMINÉ")
+    print("Fichier :", destination)
+    print("Rapport :", report)
+    print("SHA256 source :", sha_source)
+    print("SHA256 sortie :", sha_new)
+    print("Modifications :", ", ".join(changes))
+    print("Compilation syntaxique : OK")
+    print("Aucun calcul scientifique exécuté.")
+
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
