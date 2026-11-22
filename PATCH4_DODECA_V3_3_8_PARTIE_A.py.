@@ -1,0 +1,360 @@
+
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+"""
+PATCH_DODECA_V3_3_8_PARTIE_A.py
+
+Correctif non destructif de la Partie A DODECA.
+
+ENTREE :
+DODECA_BORNE_ENERGETIQUE_EXACTE_V3_3_7_PARTIE_A.py
+
+SORTIE :
+DODECA_BORNE_ENERGETIQUE_EXACTE_V3_3_8_PARTIE_A.py
+
+Le fichier V3.3.7 n'est jamais modifié.
+Aucun calcul scientifique n'est exécuté.
+"""
+
+from pathlib import Path
+import hashlib
+import json
+import ast
+import re
+import sys
+
+
+SOURCE = Path(
+    "DODECA_BORNE_ENERGETIQUE_EXACTE_V3_3_7_PARTIE_A.py"
+)
+
+SORTIE = Path(
+    "DODECA_BORNE_ENERGETIQUE_EXACTE_V3_3_8_PARTIE_A.py"
+)
+
+RAPPORT = Path(
+    "RAPPORT_PATCH_DODECA_V3_3_8.json"
+)
+
+
+def sha256(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def remplacer_type_name(code):
+    """
+    Corrige type(x).name en type(x).__name__.
+    """
+    nouveau, nombre = re.subn(
+        r"type\(([^()\n]+)\)\.name",
+        r"type(\1).__name__",
+        code
+    )
+
+    return nouveau, nombre
+
+
+def remplacer_parseur_csv(code):
+    """
+    Remplace parse_csv_expr par un parseur strict
+    pour Q(sqrt(5)).
+
+    Accepte :
+        1
+        -2
+        1/3
+        sqrt(5)
+        -sqrt(5)
+        2*sqrt(5)
+        3/2*sqrt(5)
+        1+2*sqrt(5)
+        1-2*sqrt(5)
+
+    Refuse les chaînes vides et les opérateurs mal formés.
+    """
+
+    arbre = ast.parse(code)
+
+    fonctions = [
+        n for n in arbre.body
+        if isinstance(n, ast.FunctionDef)
+        and n.name == "parse_csv_expr"
+    ]
+
+    if len(fonctions) != 1:
+        raise RuntimeError(
+            "Impossible d'identifier une définition unique "
+            "de parse_csv_expr."
+        )
+
+    fonction = fonctions[0]
+
+    lignes = code.splitlines(keepends=True)
+
+    debut = fonction.lineno - 1
+    fin = fonction.end_lineno
+
+    indentation = re.match(
+        r"\s*", lignes[debut]
+    ).group(0)
+
+    nouveau_parseur = r'''
+def parse_csv_expr(s):
+    """Parse strictement une expression a+b*sqrt(5)."""
+
+    from fractions import Fraction
+    import re
+
+    if not isinstance(s, str):
+        raise TypeError("Expression CSV non textuelle.")
+
+    source = s.replace(" ", "")
+
+    if not source:
+        raise ValueError("Expression CSV vide.")
+
+    nombre = r"(?:\d+(?:/\d+)?|\d+\.\d+)"
+    terme = rf"(?:{nombre}(?:\*?sqrt\(5\))?|sqrt\(5\))"
+
+    motif = re.compile(rf"[+-]?{terme}")
+
+    morceaux = motif.findall(source)
+
+    if not morceaux or "".join(morceaux) != source:
+        raise ValueError(
+            f"Expression Q(sqrt(5)) mal formée : {s!r}"
+        )
+
+    a = Fraction(0)
+    b = Fraction(0)
+
+    for morceau in morceaux:
+
+        signe = 1
+        terme_courant = morceau
+
+        if terme_courant.startswith("+"):
+            terme_courant = terme_courant[1:]
+
+        elif terme_courant.startswith("-"):
+            signe = -1
+            terme_courant = terme_courant[1:]
+
+        if "sqrt(5)" in terme_courant:
+
+            coefficient = (
+                terme_courant
+                .replace("*sqrt(5)", "")
+                .replace("sqrt(5)", "")
+            )
+
+            if coefficient:
+                coefficient = Fraction(coefficient)
+            else:
+                coefficient = Fraction(1)
+
+            b += signe * coefficient
+
+        else:
+            a += signe * Fraction(terme_courant)
+
+    return (a, b)
+'''
+
+    nouveau_parseur = "\n".join(
+        indentation + ligne if ligne else ligne
+        for ligne in nouveau_parseur.strip("\n").split("\n")
+    ) + "\n"
+
+    nouvelles_lignes = (
+        lignes[:debut]
+        + [nouveau_parseur]
+        + lignes[fin:]
+    )
+
+    return "".join(nouvelles_lignes)
+
+
+def ajouter_garde_symetrie(code):
+    """
+    Ajoute un contrôle exact de symétrie au début
+    des fonctions LDL lorsque leur signature utilise D.
+
+    Si une fonction ou une signature est inattendue,
+    le script s'arrête plutôt que de deviner.
+    """
+
+    arbre = ast.parse(code)
+
+    lignes = code.splitlines(keepends=True)
+
+    fonctions = {
+        n.name: n
+        for n in arbre.body
+        if isinstance(n, ast.FunctionDef)
+    }
+
+    if "verifier_symetrie" not in fonctions:
+        raise RuntimeError(
+            "Fonction verifier_symetrie introuvable."
+        )
+
+    modifications = []
+
+    for nom in ("ldl_with_pivot", "ldl_audit"):
+
+        if nom not in fonctions:
+            continue
+
+        fonction = fonctions[nom]
+
+        arguments = [
+            argument.arg
+            for argument in fonction.args.args
+        ]
+
+        if "D" not in arguments:
+            raise RuntimeError(
+                f"Signature inattendue pour {nom}."
+            )
+
+        premiere_ligne = fonction.body[0].lineno - 1
+
+        indentation = re.match(
+            r"\s*", lignes[premiere_ligne]
+        ).group(0)
+
+        garde = (
+            indentation
+            + "if not verifier_symetrie(D):\n"
+            + indentation
+            + "    raise ValueError("
+            + '"Matrice LDL non symétrique.")\n'
+        )
+
+        modifications.append(
+            (premiere_ligne, garde)
+        )
+
+    for position, garde in sorted(
+        modifications, reverse=True
+    ):
+        lignes.insert(position, garde)
+
+    return "".join(lignes), len(modifications)
+
+
+def verifier_exports(code):
+    """
+    Contrôle la présence des exports déclarés
+    dans __all__, si cette déclaration existe.
+
+    Ne prétend pas vérifier à lui seul les 62
+    dépendances externes de B1/B2.
+    """
+
+    arbre = ast.parse(code)
+
+    for noeud in arbre.body:
+
+        if isinstance(noeud, ast.Assign):
+
+            for cible in noeud.targets:
+
+                if isinstance(cible, ast.Name):
+                    if cible.id == "__all__":
+
+                        if isinstance(noeud.value, ast.List):
+                            return len(noeud.value.elts)
+
+    return None
+
+
+def main():
+
+    if not SOURCE.is_file():
+        print("ERREUR : source V3.3.7 introuvable.")
+        return 1
+
+    if SORTIE.exists():
+        print(
+            "ERREUR : V3.3.8 existe déjà. "
+            "Aucun écrasement autorisé."
+        )
+        return 1
+
+    donnees = SOURCE.read_bytes()
+
+    try:
+        code = donnees.decode("utf-8")
+    except UnicodeDecodeError:
+        print("ERREUR : source non UTF-8.")
+        return 1
+
+    hash_source = sha256(donnees)
+
+    operations = {}
+
+    try:
+
+        code = remplacer_parseur_csv(code)
+        operations["parseur_csv"] = "REMPLACE"
+
+        code, nombre = remplacer_type_name(code)
+        operations["corrections_type_name"] = nombre
+
+        code, nombre_ldl = ajouter_garde_symetrie(code)
+        operations["gardes_symetrie_ldl"] = nombre_ldl
+
+        # Compilation syntaxique uniquement.
+        compile(code, str(SORTIE), "exec")
+
+        nombre_exports = verifier_exports(code)
+
+    except Exception as erreur:
+
+        print("PATCH INTERROMPU :", erreur)
+        print("Aucun fichier V3.3.8 généré.")
+        return 2
+
+    resultat = code.encode("utf-8")
+
+    # Création d'un nouveau fichier.
+    SORTIE.write_bytes(resultat)
+
+    rapport = {
+        "source": str(SOURCE),
+        "source_sha256": hash_source,
+        "sortie": str(SORTIE),
+        "sortie_sha256": sha256(resultat),
+        "operations": operations,
+        "exports_declares": nombre_exports,
+        "syntaxe_python": "PASSE",
+        "calculs_scientifiques": "NON EXECUTES",
+        "tests_metier": "NON EXECUTES",
+        "certification_mathematique": "NON REVENDIQUEE",
+        "statut": "PATCH A AUDITER"
+    }
+
+    RAPPORT.write_text(
+        json.dumps(
+            rapport,
+            indent=2,
+            ensure_ascii=False
+        ),
+        encoding="utf-8"
+    )
+
+    print("V3.3.8 créée :", SORTIE)
+    print("SHA-256 source :", hash_source)
+    print("SHA-256 sortie :", sha256(resultat))
+    print("Rapport :", RAPPORT)
+    print("Opérations :", operations)
+    print("Aucun calcul scientifique exécuté.")
+
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
