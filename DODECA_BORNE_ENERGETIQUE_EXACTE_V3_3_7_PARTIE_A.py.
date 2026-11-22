@@ -1,0 +1,774 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""DODECA — BORNE ENERGETIQUE EXACTE V3.3.7 — PARTIE A.
+Scission en 2 morceaux du fichier V3.3.7 monolithique, sans réécriture :
+
+PARTIE A : constantes, corps Q(sqrt5,sqrt6), Q(sqrt5), matrices, symétrie,
+provenance, evaluer_borne, LDL, borne d'arrondi, comparaison archives,
+géométrie, arêtes géométriques, espace accessible.
+
+PARTIE B : pilotage main() + tests négatifs + rapport + écriture.
+Elle importe cette Partie A : son espace de noms est exactement celui de
+l'original. Le fichier V3.3.7 monolithique n'est pas modifié.
+Ne pas exécuter avant revue statique complète.
+"""
+import hashlib, io, json, math, os, re, sys, tempfile, time, traceback
+from fractions import Fraction
+from datetime import datetime, timezone
+from pathlib import Path
+import numpy as np
+
+__all__ = ["EXP","INDISPENSABLE","TOL_ARCHIVES","EPS_MACHINE","U_ARRONDI","CLES_GATE",
+"F","F0","F1","fadd","fneg","fsub","fmul","fscale","fiszero","solve_lin","finv","fdiv",
+"f_to_float","f_to_str","sqrt_bounds","f_interval_den","f_sign_adaptive","f_is_pos",
+"parse_csv_expr","q5_to_F","q5_add","q5_sub","q5_mul","q5_scale_int","q5_to_str","q5_is_pos",
+"dist_carree_q5","sp_clean","sp_mul","sp_scale","sp_matvec","sp_trace","sp_eq","dense_matvec",
+"dense_quad","dense_eq","est_carree","verifier_symetrie","verifier_verrou_projecteurs",
+"valider_fichier_provenance","valider_provenance_sur_octets","verifier_integrite_hashes",
+"verifier_integrite_fichiers","evaluer_borne","schur_to_y","verify_counterexample",
+"ldl_with_pivot","ldl_audit","calculer_borne_arrondi","comparer_archives",
+"valider_geometrie","valider_aretes_geometriques","accessible_nonempty",
+"valider_entrees","verifier_rapport_sans_nan","verifier_exports_partie_a","statut_corroboration","verifier_integrite_fichier_chemin"]
+
+EXP = {
+"SOMMETS_DODECAEDRE.csv": "48762d7860809f8e1dcc10507da70da49989937cc81e0e7680663fd3e4eddf6d",
+"CUBES_5.csv": "a8c84c3e99816d9065cc0f9964bd3473fc544c5450bf9fe264f7a4d9e9bad9e5",
+"ROTATIONS_EXACTES.json": "d2b136270db2c834fc295516d48b1c9cb739eccb3028c514480331abdb33c0d5",
+"R_K0.npz": "9663363940dd3b20fbefeccbf9422ed51fac57ab2dc3fc0d96b772bf6219082f",
+}
+INDISPENSABLE = ["SOMMETS_DODECAEDRE.csv","CUBES_5.csv","ROTATIONS_EXACTES.json","R_K0.npz"]
+
+# Tolérance archives : 1e-12. Conservée parce que la borne quantitative de
+# calculer_borne_arrondi() la valide (borne < tolérance) sur la structure réelle
+# de R. Si cette validation échouait, la tolérance ne serait pas justifiée et
+# la certification serait bloquée. Comparaison = corroboration, jamais preuve exacte.
+
+TOL_ARCHIVES = 1e-12
+EPS_MACHINE = 2.0 ** -52
+U_ARRONDI = 2.0 ** -53
+CLES_GATE = ["prov_conformes","integrite_entrees","geometrie_validee","projecteurs_identites",
+"espace_accessible_non_vide_valide","energie_initiale_exacte","B_definie_positive",
+"LDL_PSD","tests_negatifs_reussis",
+"aucune_erreur_bloquante","aucune_section_indispensable_en_echec"]
+
+# ---------- Corps Q(sqrt5, sqrt6) ----------
+
+def F(a=0,b=0,c=0,d=0): return (Fraction(a),Fraction(b),Fraction(c),Fraction(d))
+F0 = F(); F1 = F(1)
+def fadd(x,y): return (x[0]+y[0],x[1]+y[1],x[2]+y[2],x[3]+y[3])
+def fneg(x): return (-x[0],-x[1],-x[2],-x[3])
+def fsub(x,y): return fadd(x,fneg(y))
+def fmul(x,y):
+    a,b,c,d = x; e,f,g,h = y
+    return (a*e+5*b*f+6*c*g+30*d*h, a*f+b*e+6*c*h+6*d*g,
+            a*g+c*e+5*b*h+5*d*f, a*h+d*e+b*g+c*f)
+def fscale(x,q): q=Fraction(q); return (x[0]*q,x[1]*q,x[2]*q,x[3]*q)
+def fiszero(x): return x==(Fraction(0),)*4
+def solve_lin(M,rhs):
+    n=len(M); A=[row[:] + [rhs[i]] for i,row in enumerate(M)]
+    for col in range(n):
+        piv=None
+        for r in range(col,n):
+            if A[r][col]!=0: piv=r; break
+        if piv is None: raise ZeroDivisionError("matrice singulière")
+        A[col],A[piv]=A[piv],A[col]
+        pv=A[col][col]; A[col]=[v/pv for v in A[col]]
+        for r in range(n):
+            if r!=col and A[r][col]!=0:
+                f=A[r][col]; A[r]=[a-f*b for a,b in zip(A[r],A[col])]
+    return [A[i][n] for i in range(n)]
+def finv(x):
+    if fiszero(x): raise ZeroDivisionError("inverse de 0 dans Q(sqrt5,sqrt6)")
+    cols=[]
+    for j in range(4):
+        e=[Fraction(0)]*4; e[j]=Fraction(1); cols.append(fmul(x,tuple(e)))
+    M=[[cols[j][i] for j in range(4)] for i in range(4)]
+    return tuple(solve_lin(M,[Fraction(1),Fraction(0),Fraction(0),Fraction(0)]))
+def fdiv(x,y): return fmul(x,finv(y))
+def f_to_float(x): return float(x[0]+x[1]*5**0.5+x[2]*6**0.5+x[3]*30**0.5)
+def f_to_str(x):
+    parts=[]
+    for v,n in zip(x,["","sqrt5","sqrt6","sqrt30"]):
+        if v!=0: parts.append(f"{v}*{n}" if n else str(v))
+    return " + ".join(parts) if parts else "0"
+def sqrt_bounds(p,den):
+    n=math.isqrt(p*den*den); return (Fraction(n,den), Fraction(n+1,den))
+def f_interval_den(x,den):
+    lo=Fraction(0); hi=Fraction(0)
+    for coeff,p in [(x[1],5),(x[2],6),(x[3],30)]:
+        lo_p,hi_p=sqrt_bounds(p,den)
+        if coeff>=0: lo+=coeff*lo_p; hi+=coeff*hi_p
+        else: lo+=coeff*hi_p; hi+=coeff*lo_p
+    lo+=x[0]; hi+=x[0]; return (lo,hi)
+def f_sign_adaptive(x,dens=(10**12,10**18,10**24,10**36,10**60,10**100)):
+    if fiszero(x): return 0
+    for den in dens:
+        lo,hi=f_interval_den(x,den)
+        if lo>0: return 1
+        if hi<0: return -1
+    return None
+def f_is_pos(x): return f_sign_adaptive(x)==1
+def parse_csv_expr(s):
+    a=b=Fraction(0)
+    for t in re.findall(r"[+-]?[^+-]+", s.replace(" ","")):
+        sg=1
+        if t[0]=="+": t=t[1:]
+        elif t[0]=="-": sg=-1; t=t[1:]
+        if "sqrt(5)" in t:
+            pre,post=t.split("sqrt(5)"); c=Fraction(pre.rstrip("*")) if pre.rstrip("*") else Fraction(1)
+            if post.startswith("/"): c/=Fraction(post[1:])
+            elif post.startswith("*"): c*=Fraction(post[1:])
+            elif post!="": raise ValueError(s)
+            b+=sg*c
+        else: a+=sg*Fraction(t)
+    return (a,b)
+def q5_to_F(pair): return (Fraction(pair[0]),Fraction(pair[1]),Fraction(0),Fraction(0))
+def q5_add(x,y): return (x[0]+y[0], x[1]+y[1])
+def q5_sub(x,y): return (x[0]-y[0], x[1]-y[1])
+def q5_mul(x,y): return (x[0]*y[0]+5*x[1]*y[1], x[0]*y[1]+x[1]*y[0])
+def q5_scale_int(x,k): return (x[0]*k, x[1]*k)
+def q5_to_str(x):
+    if x[1]==0: return str(x[0])
+    if x[0]==0: return f"{x[1]}*sqrt5"
+    return f"{x[0]} + {x[1]}*sqrt5"
+def q5_is_pos(x): return f_sign_adaptive(q5_to_F(x))==1
+def dist_carree_q5(V,a,b):
+    s=(Fraction(0),Fraction(0))
+    for k in range(3):
+        dx=q5_sub(V[b][k],V[a][k]); s=q5_add(s,q5_mul(dx,dx))
+    return s
+
+# ---------- Matrices + symétrie ----------
+
+def sp_clean(d): return {k:v for k,v in d.items() if not fiszero(v)}
+def sp_mul(A,B):
+    brow={}
+    for (r,c),v in B.items(): brow.setdefault(r,[]).append((c,v))
+    C={}
+    for (r,m),av in A.items():
+        for c,bv in brow.get(m,[]):
+            C[(r,c)]=fadd(C.get((r,c),F0),fmul(av,bv))
+    return sp_clean(C)
+def sp_scale(A,s): return sp_clean({k:fmul(v,s) for k,v in A.items()})
+def sp_matvec(A,v):
+    o=[F0]*60
+    for (r,c),x in A.items(): o[r]=fadd(o[r],fmul(x,v[c]))
+    return o
+def sp_trace(A):
+    s=F0
+    for i in range(60): s=fadd(s,A.get((i,i),F0))
+    return s
+def sp_eq(A,B): return sp_clean(A)==sp_clean(B)
+def dense_matvec(M,v):
+    out=[]
+    for i in range(len(M)):
+        s=F0
+        for j in range(len(v)): s=fadd(s,fmul(M[i][j],v[j]))
+        out.append(s)
+    return out
+def dense_quad(D,y):
+    Dy=dense_matvec(D,y); s=F0
+    for i in range(len(y)): s=fadd(s,fmul(y[i],Dy[i]))
+    return s
+def dense_eq(A,B):
+    return len(A)==len(B) and all(len(A[i])==len(B[i]) for i in range(len(A))) and all(A[i][j]==B[i][j] for i in range(len(A)) for j in range(len(A[i])))
+def est_carree(D):
+    return isinstance(D,list) and len(D)>0 and all(isinstance(row,list) and len(row)==len(D) for row in D)
+def verifier_symetrie(M):
+    """Exact : M carrée et M[i][j] == M[j][i] pour tous i,j. Non carrée -> False."""
+    if not est_carree(M): return False
+    n=len(M)
+    for i in range(n):
+        for j in range(n):
+            if M[i][j]!=M[j][i]: return False
+    return True
+
+# ---------- Provenance ----------
+
+def valider_fichier_provenance(chemin, sha_attendu):
+    info={"chemin":str(chemin),"categorie":"indispensable","sha256_attendu":sha_attendu,
+    "sha256_avant":None,"taille_octets":None,"statut":None,"detail":None}
+    try:
+        p=Path(chemin)
+        if not p.exists(): info["statut"]="ABSENT_OU_ILLISIBLE"; info["detail"]="Fichier absent"; return info
+        if p.is_dir(): raise IsADirectoryError("chemin est un répertoire, non un fichier")
+        data=p.read_bytes()
+    except Exception as e:
+        info["statut"]="ABSENT_OU_ILLISIBLE"; info["detail"]=f"{type(e).__name__}: {e}"; return info
+    return valider_provenance_sur_octets(data,sha_attendu,chemin,info)
+def valider_provenance_sur_octets(data_octets, sha_attendu, chemin, info=None):
+    """Valide à partir d'octets déjà lus une seule fois (correction 3).
+    Ne relit jamais le disque. data_octets=None -> ABSENT_OU_ILLISIBLE."""
+    if info is None:
+        info={"chemin":str(chemin),"categorie":"indispensable","sha256_attendu":sha_attendu,
+        "sha256_avant":None,"taille_octets":None,"statut":None,"detail":None}
+    if data_octets is None:
+        info["statut"]="ABSENT_OU_ILLISIBLE"; info["detail"]="Octets indisponibles (lecture initiale en échec)"; return info
+    try:
+        s=hashlib.sha256(data_octets).hexdigest(); info["sha256_avant"]=s; info["taille_octets"]=len(data_octets)
+        if s==sha_attendu: info["statut"]="CONFORME"
+        else: info["statut"]="NON_CONFORME"; info["detail"]="SHA-256 non conforme"
+    except Exception as e:
+        info["statut"]="ABSENT_OU_ILLISIBLE"; info["detail"]=f"{type(e).__name__}: {e}"
+    return info
+def verifier_integrite_hashes(sha_avant, sha_apres):
+    return sha_avant is not None and sha_apres is not None and sha_avant==sha_apres
+def verifier_integrite_fichiers(fichiers, sha_avant):
+    details={}; inch=True
+    for nom,ch in fichiers.items():
+        p=Path(ch)
+        if not p.exists():
+            details[nom]={"ok":False,"sha256_apres":None,"detail":"fichier disparu entre contrôle initial et contrôle final"}; inch=False; continue
+        if p.is_dir():
+            details[nom]={"ok":False,"sha256_apres":None,"detail":"chemin est un répertoire, non un fichier"}; inch=False; continue
+        try: sa=hashlib.sha256(p.read_bytes()).hexdigest()
+        except Exception as e:
+            details[nom]={"ok":False,"sha256_apres":None,"detail":f"{type(e).__name__}: {e}"}; inch=False; continue
+        ok=verifier_integrite_hashes(sha_avant.get(nom),sa)
+        details[nom]={"ok":bool(ok),"sha256_apres":sa,"detail":"conforme" if ok else "empreinte différente (fichier modifié)"}
+        if not ok: inch=False
+    return (inch,details)
+def evaluer_borne(gate_demontre, ldl_stat, ldl_audit_ok):
+    """V3.3.7 : validation stricte. Seuls les vrais booléens (type is bool) sont acceptés.
+    "1", 1, "oui", "True" et toute valeur convertible en True sont REFUSÉES.
+    Une clé obligatoire absente bloque. Une valeur indécise reste indécise.
+    V3.3.7 Solution B impérative : les archives flottantes ne participent PLUS
+    au gate mathématique. "archives_dans_tolerance" a été retirée de CLES_GATE.
+    La comparaison des archives est une corroboration seule, jamais une preuve."""
+    if not isinstance(gate_demontre, dict) or not isinstance(ldl_stat, str):
+        return {"borne_statut":"NON_CONCLU","conclusion_borne":"Gate invalide (arguments non conformes).",
+        "conclusion_globale_M":"NON_CONCLU pour M(t).","M_psd_conclue_inconditionnelle":False}
+    if set(gate_demontre.keys()) != set(CLES_GATE):
+        manquantes=sorted(set(CLES_GATE)-set(gate_demontre.keys())); superflues=sorted(set(gate_demontre.keys())-set(CLES_GATE))
+        return {"borne_statut":"NON_CONCLU",
+        "conclusion_borne":f"Gate invalide : clés manquantes {manquantes}, superflues {superflues}.",
+        "conclusion_globale_M":"NON_CONCLU pour M(t).","M_psd_conclue_inconditionnelle":False}
+
+    # Strict booléen : type(v) is bool, pas isinstance (bool est sous-classe de int).
+    for k,v in gate_demontre.items():
+        if type(v) is not bool:
+            return {"borne_statut":"NON_CONCLU",
+            "conclusion_borne":f"Gate invalide : valeur non booléenne pour la clé {k!r} (type {type(v).name}).",
+            "conclusion_globale_M":"NON_CONCLU pour M(t).","M_psd_conclue_inconditionnelle":False}
+    if type(ldl_audit_ok) is not bool:
+        return {"borne_statut":"NON_CONCLU","conclusion_borne":"Gate invalide : ldl_audit_ok non booléen.",
+        "conclusion_globale_M":"NON_CONCLU pour M(t).","M_psd_conclue_inconditionnelle":False}
+    if ldl_stat not in ("PSD","INDEFINIE","INDECIS","NON_CALCULE"):
+        return {"borne_statut":"NON_CONCLU","conclusion_borne":f"Gate invalide : ldl_stat inconnu {ldl_stat!r}.",
+        "conclusion_globale_M":"NON_CONCLU pour M(t).","M_psd_conclue_inconditionnelle":False}
+    if ldl_stat in ("INDECIS","NON_CALCULE"):
+        return {"borne_statut":"NON_CONCLU",
+        "conclusion_borne":"Borne NON CONCLUE : LDL indécis ou non calculé, indécision conservée.",
+        "conclusion_globale_M":"NON_CONCLU pour M(t).","M_psd_conclue_inconditionnelle":False}
+
+    # Exigences mathématiques (archives exclues du gate, corroboration seule) :
+    gate_sans_archives={k:v for k,v in gate_demontre.items() if k not in ("LDL_PSD",)}
+    sans_ok=all(gate_sans_archives.values())
+    if sans_ok and gate_demontre["LDL_PSD"] is True and ldl_stat=="PSD" and ldl_audit_ok is True:
+        return {"borne_statut":"DEMONTRE",
+        "conclusion_borne":"Borne mu >= 1/5 DEMONTREE exactement (gate global vérifié, archives en corroboration seule).",
+        "conclusion_globale_M":"CONDITIONNELLE : M(t) >= 0 si les prémisses structurelles (M(t) = ..., alpha+4beta = 12) sont valides. V3.3.7 ne les re-démontre pas.",
+        "M_psd_conclue_inconditionnelle":False}
+    if sans_ok and gate_demontre["LDL_PSD"] is False and ldl_stat=="INDEFINIE" and ldl_audit_ok is True:
+        return {"borne_statut":"REFUTE",
+        "conclusion_borne":"Borne mu >= 1/5 REFUTEE sur l'espace de relaxation (contre-exemple exact vérifié).",
+        "conclusion_globale_M":"NON_CONCLU pour M(t) : la réfutation sur l'espace de relaxation ne réfute PAS la positivité réelle de M(t). Ne pas confondre réfutation de la borne sur l'espace de relaxation, réfutation de la positivité de M(t), et absence de démonstration.",
+        "M_psd_conclue_inconditionnelle":False}
+    return {"borne_statut":"NON_CONCLU",
+    "conclusion_borne":"Borne mu >= 1/5 NON CONCLUE (gate incomplet, indécision ou blocage).",
+    "conclusion_globale_M":"NON_CONCLU pour M(t) : ne pas conclure M(t) >= 0.",
+    "M_psd_conclue_inconditionnelle":False}
+
+# ---------- LDL ----------
+
+def schur_to_y(L,k,z_schur,perm):
+    n=len(L); m=len(z_schur)
+    t=[F0]*k
+    for j in range(k):
+        s=F0
+        for i in range(m):
+            if not fiszero(z_schur[i]) and not fiszero(L[k+i][j]): s=fadd(s,fmul(L[k+i][j],z_schur[i]))
+        t[j]=s
+    u=[F0]*k
+    for j in range(k-1,-1,-1):
+        s=fneg(t[j])
+        for l in range(j+1,k): s=fsub(s,fmul(L[l][j],u[l]))
+        u[j]=s
+    y_perm=u+z_schur
+    y=[F0]*n
+    for idx,p in enumerate(perm): y[p]=y_perm[idx]
+    return y
+def verify_counterexample(D,y,attendu=None):
+    if not est_carree(D): return (False,"D non carrée")
+    if len(y)!=len(D): return (False,f"dimension contre-exemple {len(y)} != dim D {len(D)}")
+    if all(fiszero(v) for v in y): return (False,"y nul")
+    q=dense_quad(D,y); sg=f_sign_adaptive(q)
+    if sg!=-1: return (False,f"q non < 0 (signe {sg}, q={f_to_str(q)})")
+    if attendu is not None and q!=attendu: return (False,f"q != attendu ({f_to_str(q)} != {f_to_str(attendu)})")
+    return (True,f"q={f_to_str(q)} < 0 vérifié exactement")
+def ldl_with_pivot(D):
+    if not est_carree(D):
+        return {"statut":"INDECIS","perm":[],"L":[],"diag":[],"contre_exemple":None,"k_arret":0,"attendu":None,
+        "factorisation":"aucune","verification":(False,"D non carrée"),"raison":"D non carrée."}
+    n=len(D); A=[row[:] for row in D]; perm=list(range(n))
+    L=[[F0]*n for _ in range(n)]
+    for i in range(n): L[i][i]=F1
+    diag=[]
+    for k in range(n):
+        cand=[i for i in range(k,n) if not fiszero(A[i][i])]
+        if cand:
+            piv=max(cand,key=lambda i: abs(f_to_float(A[i][i])))
+            if piv!=k:
+                A[k],A[piv]=A[piv],A[k]
+                for row in A: row[k],row[piv]=row[piv],row[k]
+                perm[k],perm[piv]=perm[piv],perm[k]
+                for j in range(k): L[k][j],L[piv][j]=L[piv][j],L[k][j]
+            d=A[k][k]; sg=f_sign_adaptive(d)
+            if sg is None:
+                return {"statut":"INDECIS","perm":perm,"L":L,"diag":diag,"contre_exemple":None,"k_arret":k,"attendu":None,
+                "factorisation":"partielle (interrompue, non reconstruite)","verification":(False,"signe pivot indécis après raffinement"),"raison":"Signe du pivot LDL indécis."}
+            if sg<0:
+                z=[F0]*(n-k); z[0]=F1
+                y=schur_to_y(L,k,z,perm)
+                ok,msg=verify_counterexample(D,y,attendu=d)
+                if not ok:
+                    return {"statut":"INDECIS","perm":perm,"L":L,"diag":diag,"contre_exemple":None,"k_arret":k,"attendu":d,
+                    "factorisation":"partielle (interrompue, non reconstruite)","verification":(False,msg),"raison":"Vérification contre-exemple (pivot négatif) échouée."}
+                return {"statut":"INDEFINIE","perm":perm,"L":L,"diag":diag+[d],"contre_exemple":y,"k_arret":k,"attendu":d,
+                "factorisation":"partielle (non reconstruite, audit limité)","verification":(True,msg),"raison":"Pivot négatif, contre-exemple vérifié : y^T D y = d_k < 0."}
+            diag.append(d)
+            for i in range(k+1,n):
+                L[i][k]=fdiv(A[i][k],d) if not fiszero(A[i][k]) else F0
+            for i in range(k+1,n):
+                for j in range(k+1,n):
+                    A[i][j]=fsub(A[i][j],fmul(fmul(L[i][k],d),L[j][k]))
+            continue
+        reste_nul=all(fiszero(A[i][j]) for i in range(k,n) for j in range(k,n))
+        if reste_nul:
+            diag.extend([F0]*(n-k))
+            return {"statut":"PSD","perm":perm,"L":L,"diag":diag,"contre_exemple":None,"k_arret":n,"attendu":None,
+            "factorisation":"complète","verification":(True,"reste nul"),"raison":"Reste nul, pivots >= 0."}
+        found=None
+        for i in range(k,n):
+            for j in range(i+1,n):
+                if not fiszero(A[i][j]): found=(i,j); break
+            if found: break
+        if found is None:
+            return {"statut":"INDECIS","perm":perm,"L":L,"diag":diag,"contre_exemple":None,"k_arret":k,"attendu":None,
+            "factorisation":"partielle (interrompue, non reconstruite)","verification":(False,"bloc incohérent"),"raison":"Bloc de Schur incohérent."}
+        i,j=found; s=A[i][j]; sg=f_sign_adaptive(s)
+        if sg is None:
+            return {"statut":"INDECIS","perm":perm,"L":L,"diag":diag,"contre_exemple":None,"k_arret":k,"attendu":None,
+            "factorisation":"partielle (interrompue, non reconstruite)","verification":(False,"signe hors-diagonale indécis après raffinement"),
+            "raison":"Signe hors-diagonale du bloc de Schur indécis (jamais choisi arbitrairement)."}
+        z=[F0]*(n-k); z[i-k]=F1; z[j-k]=fscale(F1,-sg)
+        attendu=fscale(fmul(F(2),s),-sg)
+        y=schur_to_y(L,k,z,perm)
+        ok,msg=verify_counterexample(D,y,attendu=attendu)
+        if not ok:
+            return {"statut":"INDECIS","perm":perm,"L":L,"diag":diag,"contre_exemple":None,"k_arret":k,"attendu":attendu,
+            "factorisation":"partielle (interrompue, non reconstruite)","verification":(False,msg),"raison":"Vérification contre-exemple (bloc Schur) échouée."}
+        return {"statut":"INDEFINIE","perm":perm,"L":L,"diag":diag,"contre_exemple":y,"k_arret":k,"attendu":attendu,
+        "factorisation":"partielle (non reconstruite, audit limité)","verification":(True,msg),"raison":"Bloc de Schur à diagonales nulles + hors-diagonale non nulle, contre-exemple vérifié."}
+    return {"statut":"PSD","perm":perm,"L":L,"diag":diag,"contre_exemple":None,"k_arret":n,"attendu":None,
+    "factorisation":"complète","verification":(True,"tous pivots >= 0"),"raison":"Tous pivots >= 0."}
+def ldl_audit(D,ldl_res):
+    if not est_carree(D): return (False,"audit : D non carrée.")
+    n=len(D); perm=ldl_res.get("perm"); L=ldl_res.get("L"); diag=ldl_res.get("diag")
+    if perm is None or L is None or diag is None: return (False,"audit : LDL incomplet (perm/L/diag manquants).")
+    if len(perm)!=n: return (False,f"audit : dimension permutation {len(perm)} != dim D {n}.")
+    if sorted(perm)!=list(range(n)): return (False,"audit : permutation invalide.")
+    if len(L)!=n or any(len(row)!=n for row in L): return (False,f"audit : dimensions L incohérentes (attendu {n}x{n}).")
+    st=ldl_res.get("statut"); k_arret=ldl_res.get("k_arret")
+    if k_arret is None: return (False,"audit : k_arret manquant.")
+    if st=="PSD":
+        if ldl_res.get("factorisation")!="complète": return (False,"audit PSD : factorisation annoncée non complète.")
+        if len(diag)!=n: return (False,f"audit PSD : dimension pivots {len(diag)} != dim D {n}.")
+        for i in range(n):
+            if L[i][i]!=F1: return (False,f"audit PSD : L non unitaire en diagonale (i={i}).")
+            for j in range(i+1,n):
+                if not fiszero(L[i][j]): return (False,f"audit PSD : L non triangulaire inférieure (i={i}, j={j}).")
+        Dp=[[D[perm[i]][perm[j]] for j in range(n)] for i in range(n)]
+        M=[[fmul(L[i][j],diag[j]) for j in range(n)] for i in range(n)]
+        R=[[F0]*n for _ in range(n)]
+        for i in range(n):
+            for j in range(n):
+                s=F0
+                for k in range(n): s=fadd(s,fmul(M[i][k],L[j][k]))
+                R[i][j]=s
+        if not dense_eq(R,Dp): return (False,"audit PSD : reconstruction L Diag L^T != P D P^T.")
+        for d in diag:
+            sg=f_sign_adaptive(d)
+            if sg is None: return (False,"audit PSD : signe d'un pivot indécis.")
+            if sg<0: return (False,"audit PSD : pivot négatif.")
+        return (True,"audit LDL PSD : D carrée, dimensions cohérentes, L unitaire, reconstruction complète exacte, pivots >= 0.")
+    if st=="INDEFINIE":
+        if "non reconstruite" not in str(ldl_res.get("factorisation","")): return (False,"audit INDEFINIE : factorisation annoncée comme reconstruite, refusé (audit limité).")
+        y=ldl_res.get("contre_exemple")
+        if y is None: return (False,"audit INDEFINIE : sans contre-exemple.")
+        if len(y)!=n: return (False,f"audit INDEFINIE : dimension contre-exemple {len(y)} != dim D {n}.")
+        if len(diag) not in (k_arret,k_arret+1): return (False,f"audit INDEFINIE : dimension pivots {len(diag)} incohérente avec k_arret {k_arret}.")
+        for j in range(min(k_arret,n)):
+            if L[j][j]!=F1: return (False,f"audit INDEFINIE : L non unitaire en diagonale partielle (j={j}).")
+        attendu=ldl_res.get("attendu")
+        ok,msg=verify_counterexample(D,y,attendu=attendu)
+        if not ok: return (False,f"audit INDEFINIE : certificat non vérifié : {msg}")
+        return (True,f"audit LDL INDEFINIE (LIMITÉ) : D carrée, dimensions cohérentes, structure minimale, certificat décisif {msg}. Factorisation partielle NON reconstruite.")
+    if st=="INDECIS":
+        return (False,"audit LDL INDECIS : dimensions vérifiées, indécision conservée, aucune factorisation complète prétendue.")
+    return (False,f"audit : statut LDL inconnu : {st}")
+
+# ---------- Borne d'arrondi des archives (correction 2) ----------
+
+def calculer_borne_arrondi(R_exact, K_exact, Ra, Ka):
+    """Calcule Nmax et S_abs_max sur la structure réellement reconstruite de R,
+    et établit une borne d'arrondi pour K0 = R^T R.
+    Hypothèses vérifiées explicitement (H1..H5). Si une hypothèse échoue,
+    la fonction ne retourne PAS une « borne théorique » : borne_K=None,
+    hypotheses_verifiees=False, estimation_non_verifiee documentée.
+    Modèle : flottants binaire64, u = 2**-53.
+    - conversion exact -> flottant : |fl(x)-x| <= u|x| ;
+    - multiplication flottante : |fl(ab)-ab| <= u|a*b| ;
+    - sommation de N termes : |fl(sum)-sum| <= (N-1)*u*sum|termes| (borne valable
+      pour tout ordre de sommation, donc sans hypothèse sur l'ordre de l'archive) ;
+    - chaque produit utilise deux R convertis : erreur <= 3u|terme| (2 conversions + mult).
+    - les annulations sont prises en compte : la borne utilise sum|termes|, non |sum|,
+      donc une annulation ne peut que réduire l'erreur réelle sous la borne.
+    Borne K0 : (Nmax+3)*u*S_abs_max + u*echelle_K (conversion finale de K exact).
+    Borne R : 2*u*echelle_R (conversion + stockage)."""
+    res={"hypotheses":{},"hypotheses_verifiees":False,"Nmax":None,"S_abs_max":None,
+    "echelle_R":None,"echelle_K":None,"borne_R":None,"borne_K":None,
+    "estimation_non_verifiee":None,"tolérance_validee":False,"detail":None}
+    try:
+        h1=isinstance(Ra,np.ndarray) and isinstance(Ka,np.ndarray) and Ra.dtype.kind=="f" and Ka.dtype.kind=="f" and Ra.dtype.itemsize==8 and Ka.dtype.itemsize==8
+        res["hypotheses"]["H1_archives_float64"]=bool(h1)
+        h2=bool(isinstance(Ra,np.ndarray) and isinstance(Ka,np.ndarray) and Ra.shape==(60,60) and Ka.shape==(60,60))
+        res["hypotheses"]["H2_formes_60x60"]=bool(h2)
+        h3=bool(np.isfinite(Ra).all() and np.isfinite(Ka).all()) if (isinstance(Ra,np.ndarray) and isinstance(Ka,np.ndarray)) else False
+        res["hypotheses"]["H3_archives_finies"]=bool(h3)
+
+        # Échelles à partir des valeurs exactes reconstruites (finies vérifiées par l'appelant).
+        Rf_vals=[f_to_float(v) for v in R_exact.values()] if R_exact else [0.0]
+        Kf_vals=[f_to_float(v) for v in K_exact.values()] if K_exact else [0.0]
+        h4=all(math.isfinite(x) for x in Rf_vals) and all(math.isfinite(x) for x in Kf_vals)
+        res["hypotheses"]["H4_reconstructions_finies"]=bool(h4)
+        echelle_R=float(max(abs(x) for x in Rf_vals)) if Rf_vals else 0.0
+        echelle_K=float(max(abs(x) for x in Kf_vals)) if Kf_vals else 0.0
+        res["echelle_R"]=echelle_R; res["echelle_K"]=echelle_K
+
+        # Nmax et S_abs_max sur la structure réelle de R.
+        Rf_dict={}
+        for (r,c),v in R_exact.items(): Rf_dict[(r,c)]=f_to_float(v)
+        Nmax=0; S_abs_max=0.0; coeffs_avec_termes=0
+        for i in range(60):
+            for j in range(60):
+                s_abs=0.0; n=0
+                for b in range(60):
+                    a=Rf_dict.get((b,i)); c=Rf_dict.get((b,j))
+                    if a is not None and c is not None:
+                        n+=1; s_abs+=abs(a*c)
+                if n>0: coeffs_avec_termes+=1
+                if n>Nmax: Nmax=n
+                if s_abs>S_abs_max: S_abs_max=s_abs
+        res["Nmax"]=int(Nmax); res["S_abs_max"]=float(S_abs_max); res["coeffs_K0_avec_termes"]=int(coeffs_avec_termes)
+        h5=(Nmax>0 and math.isfinite(S_abs_max) and math.isfinite(echelle_R) and math.isfinite(echelle_K))
+        res["hypotheses"]["H5_structure_R_non_vide_finie"]=bool(h5)
+        if not all(res["hypotheses"].values()):
+            res["detail"]="Hypothèses H1..H5 non toutes vérifiées : aucune borne théorique affirmée."
+            res["estimation_non_verifiee"]="Estimation indicative (non validée) : (Nmax+3)*u*S_abs_max + u*echelle_K, sans valeur de preuve."
+            return res
+        borne_R=2.0*U_ARRONDI*echelle_R
+        borne_K=(Nmax+3)*U_ARRONDI*S_abs_max+U_ARRONDI*echelle_K
+        res["borne_R"]=float(borne_R); res["borne_K"]=float(borne_K); res["hypotheses_verifiees"]=True
+        res["tolérance_validee"]=bool(borne_K<TOL_ARCHIVES)
+        res["ratio_tolerance_sur_borne"]=float(TOL_ARCHIVES/borne_K) if borne_K>0 else float("inf")
+        res["detail"]=(f"Borne K0 = (Nmax+3)*u*S_abs_max + u*echelle_K avec Nmax={Nmax}, S_abs_max={S_abs_max:.3e}, "
+        f"echelle_K={echelle_K:.3f}, u={U_ARRONDI:.2e} -> borne_K={borne_K:.2e}. "
+        f"Tolérance {TOL_ARCHIVES:.0e} validée : {res['tolérance_validee']} (ratio {res['ratio_tolerance_sur_borne']:.1f}x). "
+        f"Annulations prises en compte via sum|termes|. Comparaison = corroboration, jamais preuve exacte.")
+        return res
+    except Exception as e:
+        res["detail"]=f"Calcul de borne impossible : {type(e).name}: {e}"
+        res["estimation_non_verifiee"]="Aucune borne affirmée (calcul en échec)."
+        return res
+def comparer_archives(R_exact, K_exact, Ra, Ka):
+    """V3.3.7 Solution B : cette comparaison est une CORROBORATION NUMÉRIQUE SEULE.
+    Elle ne décide jamais de la validité mathématique de la borne. La preuve
+    repose exclusivement sur la reconstruction exacte de R/K0, les projecteurs
+    spectraux exacts et le quotient exact. La tolérance 1e-12 est empirique."""
+    msgs=[]; comp={}
+    def check_array(nom,arr):
+        if not isinstance(arr,np.ndarray): return (False,f"Archive {nom} : type inattendu {type(arr).name}, attendu ndarray.")
+        if arr.ndim!=2 or arr.shape!=(60,60): return (False,f"Archive {nom} : forme {arr.shape}, attendue (60,60).")
+        if arr.dtype.kind not in ("f","i","u"): return (False,f"Archive {nom} : dtype {arr.dtype}, attendu flottant/entier.")
+        try:
+            if not bool(np.isfinite(arr).all()): return (False,f"Archive {nom} : contient NaN ou infini.")
+        except Exception as e: return (False,f"Archive {nom} : contrôle finitude impossible ({e}).")
+        return (True,"")
+    ok=True
+    for nom,arr in [("R",Ra),("K0",Ka)]:
+        good,msg=check_array(nom,arr)
+        if not good: msgs.append(msg); ok=False
+    if not ok: return (False,comp,msgs)
+    Rf=np.zeros((60,60)); Kf=np.zeros((60,60))
+    try:
+        for (r,c),v in R_exact.items(): Rf[r,c]=f_to_float(v)
+        for (r,c),v in K_exact.items(): Kf[r,c]=f_to_float(v)
+    except Exception as e:
+        return (False,comp,[f"Conversion exacte -> flottant impossible : {e}"])
+    for nom,exact in [("R",Rf),("K0",Kf)]:
+        if not bool(np.isfinite(exact).all()): msgs.append(f"Reconstruction {nom} : contient NaN ou infini."); ok=False
+    if not ok: return (False,comp,msgs)
+
+    # Borne d'arrondi quantitative, hypothèses vérifiées (correction 2).
+    borne_info=calculer_borne_arrondi(R_exact,K_exact,Ra,Ka)
+    comp["borne_arrondi"]=borne_info
+    if not borne_info.get("hypotheses_verifiees"):
+        msgs.append("Borne d'arrondi non validée : hypothèses H1..H5 non vérifiées. Aucune borne théorique affirmée ; certification bloquée.")
+        return (False,comp,msgs)
+    if not borne_info.get("tolérance_validee"):
+        msgs.append(f"Tolérance {TOL_ARCHIVES:.0e} non validée par la borne quantitative : borne_K={borne_info.get('borne_K'):.2e} >= tolérance. Certification bloquée.")
+        return (False,comp,msgs)
+
+    # Borne R utilisée pour le contrôle de R, borne K pour K0.
+    comp["justification_tolerance"]=borne_info.get("detail")
+    comp["borne_theorique_R"]=borne_info.get("borne_R"); comp["borne_theorique_K0"]=borne_info.get("borne_K")
+    for nom,exact,arch,borne in [("R",Rf,Ra.astype(float),borne_info.get("borne_R")),("K0",Kf,Ka.astype(float),borne_info.get("borne_K"))]:
+        try: diff=np.abs(exact-arch)
+        except Exception as e:
+            msgs.append(f"Archive {nom} : différence impossible ({e})."); ok=False; continue
+        if not bool(np.isfinite(diff).all()):
+            msgs.append(f"Archive {nom} : différence non finie (NaN/inf) -> rejet."); ok=False; continue
+        mx=float(diff.max()); mn=float(diff.mean()); n_dep=int((diff>TOL_ARCHIVES).sum())
+        comp[nom]={"max_abs_diff":mx,"mean_abs_diff":mn,"n_depasse_tolerance":n_dep,
+        "tolerance":TOL_ARCHIVES,"borne_appliquee":borne,
+        "regle":"bloque si max > tolérance ou non fini ; jamais d'égalité flottante bit à bit ; comparaison = corroboration, jamais preuve exacte."}
+        if mx>TOL_ARCHIVES: msgs.append(f"Archive {nom} : max diff {mx:.2e} > tolérance {TOL_ARCHIVES:.0e} -> certification bloquée."); ok=False
+        if borne is not None and mx>borne:
+            # Un écart supérieur à la borne mais inférieur à la tolérance reste accepté
+            # (tolérance = marge), mais il est signalé comme dépassement de borne.
+            comp[nom]["depassement_borne"]=True
+    return (ok,comp,msgs)
+
+def verifier_verrou_projecteurs(p2, orth, somme_I, kpa, traces_entieres, somme_traces):
+    """Verrou V3.3.7 : les 6 conditions doivent être simultanément True et booléennes.
+    Un échec ou une indécision bloque. Une section exécutée n'est pas une section validée."""
+    vals={"idempotence":p2,"orthogonalite":orth,"somme_I":somme_I,"spectrale_KPa":kpa,
+    "traces_entieres":traces_entieres,"somme_traces":somme_traces}
+    for k,v in vals.items():
+        if type(v) is not bool: return False
+    return all(vals.values())
+
+def _est_entier_strict(x):
+    """Rejette les booléens utilisés comme entiers (type is int, pas bool)."""
+    return type(x) is int
+
+def valider_entrees(V, C, bars, rot, Ra, Ka):
+    """Validation renforcée avant tout appel géométrique (V3.3.7 §6).
+    Retourne (ok, motifs). Booléens rejetés comme entiers."""
+    motifs=[]
+    if type(V) is not list or len(V)!=20: motifs.append("V : type ou nombre de sommets != 20")
+    else:
+        for vi,v in enumerate(V):
+            if type(v) is not list or len(v)!=3: motifs.append(f"V[{vi}] : pas une liste de 3 coordonnées"); break
+            for k,coord in enumerate(v):
+                if type(coord) is not tuple or len(coord)!=2: motifs.append(f"V[{vi}][{k}] : coordonnée non (Fraction,Fraction)"); break
+                if not all(type(x) is Fraction for x in coord): motifs.append(f"V[{vi}][{k}] : coordonnée non Fraction"); break
+    if type(C) is not list or len(C)!=5: motifs.append("C : type ou nombre de cubes != 5")
+    else:
+        for ci,c in enumerate(C):
+            if type(c) is not set or len(c)!=8: motifs.append(f"C[{ci}] : pas un ensemble de 8 sommets"); continue
+            for v in c:
+                if not _est_entier_strict(v) or not (0<=v<20): motifs.append(f"C[{ci}] : indice {v!r} hors bornes ou non entier strict"); break
+    if type(bars) is not list or len(bars)!=60: motifs.append("bars : type ou nombre != 60")
+    else:
+        vus=set()
+        for bi,b in enumerate(bars):
+            if type(b) is not tuple or len(b)!=3: motifs.append(f"bars[{bi}] : pas un triplet"); break
+            x,y,cu=b
+            if not _est_entier_strict(x) or not _est_entier_strict(y) or not _est_entier_strict(cu): motifs.append(f"bars[{bi}] : composante booléenne ou non entière"); break
+            if not (0<=x<20 and 0<=y<20 and 1<=cu<=5): motifs.append(f"bars[{bi}] : indices hors bornes"); break
+            if x==y: motifs.append(f"bars[{bi}] : extrémités identiques"); break
+            cle=(frozenset((x,y)),cu)
+            if cle in vus: motifs.append(f"bars[{bi}] : doublon interdit (paire, cube)"); break
+            vus.add(cle)
+    if type(rot) is not list or len(rot)==0: motifs.append("rotations : type ou structure invalide (liste vide)")
+    else:
+        for ri,r in enumerate(rot):
+            if type(r) is not dict or "matrice" not in r and "rotation" not in r and len(r)==0: motifs.append(f"rotations[{ri}] : entrée vide ou non dict"); break
+    for nom,arr in [("R_archive",Ra),("K0_archive",Ka)]:
+        if not isinstance(arr, np.ndarray): motifs.append(f"{nom} : pas un ndarray")
+        elif arr.ndim!=2 or arr.shape!=(60,60): motifs.append(f"{nom} : forme {arr.shape} != (60,60)")
+        elif arr.dtype.kind not in ("f","i","u"): motifs.append(f"{nom} : dtype {arr.dtype} non numérique")
+        else:
+            try:
+                if arr.dtype.kind=="f" and not bool(np.isfinite(arr).all()): motifs.append(f"{nom} : contient NaN ou infini")
+            except Exception as e: motifs.append(f"{nom} : contrôle finitude impossible ({e})")
+    return (len(motifs)==0, motifs)
+
+def verifier_rapport_sans_nan(obj, chemin="racine"):
+    """Recherche récursive de NaN / Infinity dans un rapport. Retourne (ok, motifs)."""
+    import math as _math
+    motifs=[]
+    def rec(o, ch):
+        if isinstance(o, float):
+            if _math.isnan(o): motifs.append(f"{ch} : NaN")
+            elif _math.isinf(o): motifs.append(f"{ch} : Infinity")
+        elif isinstance(o, dict):
+            for k,v in o.items(): rec(v, f"{ch}.{k}")
+        elif isinstance(o, (list, tuple)):
+            for i,v in enumerate(o): rec(v, f"{ch}[{i}]")
+    rec(obj, chemin)
+    return (len(motifs)==0, motifs)
+
+def statut_corroboration(ok, exception=False, calcule=True):
+    if not calcule: return "CORROBORATION_NON_CALCULEE"
+    if exception: return "CORROBORATION_INDISPONIBLE"
+    return "CORROBORATION_CONFORME" if ok else "CORROBORATION_ECART"
+
+def verifier_integrite_fichier_chemin(chemin, sha_attendu=None, taille_attendue=None):
+    from pathlib import Path as _P
+    import hashlib as _h
+    try:
+        data=_P(chemin).read_bytes()
+    except Exception as e:
+        return {"statut":"ABSENT_OU_ILLISIBLE","detail":f"{type(e).name}: {e}","sha256":None,"taille_octets":None}
+    sha=_h.sha256(data).hexdigest()
+    if sha_attendu is not None and sha!=sha_attendu:
+        return {"statut":"MODIFIE","detail":"SHA-256 différent de l'attendu","sha256":sha,"taille_octets":len(data)}
+    if taille_attendue is not None and len(data)!=taille_attendue:
+        return {"statut":"MODIFIE","detail":"Taille différente de l'attendue","sha256":sha,"taille_octets":len(data)}
+    if sha_attendu is None and taille_attendue is None:
+        return {"statut":"CONFORME (lecture seule, sans référence)","detail":None,"sha256":sha,"taille_octets":len(data)}
+    return {"statut":"CONFORME","detail":None,"sha256":sha,"taille_octets":len(data)}
+
+def verifier_exports_partie_a():
+    """Vérifie que l'import expose réellement toutes les fonctions nécessaires.
+    Ne suppose pas que "import *" importe les noms privés."""
+    import sys as _sys
+    mod=_sys.modules.get(__name__)
+    manquants=[n for n in __all__ if not hasattr(mod, n)]
+    return (len(manquants)==0, manquants)
+
+# ---------- Validation géométrique ----------
+
+def valider_geometrie(V,C,bars):
+    r={}
+    r["n_sommets_20"]=len(V)==20
+    r["sommets_distincts"]=len({tuple(v) for v in V})==20
+    r["n_cubes_5"]=len(C)==5
+    r["cubes_8_distincts"]=all(len(C[c])==8 and len(set(C[c]))==8 for c in range(5))
+    r["cubes_indices_valides"]=all(all(isinstance(v,int) and 0<=v<20 for v in C[c]) for c in range(5))
+    r["cubes_distincts"]=len({frozenset(C[c]) for c in range(5)})==5
+    r["union_cubes_20"]=set().union(*[set(C[c]) for c in range(5)])==set(range(20)) if len(C)==5 else False
+    if len(C)==5:
+        cnt=[0]*20
+        for c in range(5):
+            for v in C[c]: cnt[v]+=1
+        r["chaque_sommet_2_cubes"]=all(x==2 for x in cnt)
+    else: r["chaque_sommet_2_cubes"]=False
+    r["n_barres_60"]=len(bars)==60
+    r["endpoints_distincts_valides"]=all(isinstance(a,int) and isinstance(b,int) and 0<=a<20 and 0<=b<20 and a!=b and 1<=cu<=5 for (a,b,cu) in bars)
+    r["appartenance_cube_porteur"]=all(a in C[cu-1] and b in C[cu-1] for (a,b,cu) in bars) if r["n_cubes_5"] else False
+    r["barres_par_cube_12"]=all(sum(1 for (a,b,cu) in bars if cu==c+1)==12 for c in range(5))
+    r["sans_doublon_paire_cube"]=len({(frozenset((a,b)),cu) for (a,b,cu) in bars})==len(bars)
+    deg_ok=True
+    for c in range(5):
+        for v in C[c]:
+            if sum(1 for (a,b,cu) in bars if cu==c+1 and (a==v or b==v))!=3: deg_ok=False
+    r["degre_3_par_cube"]=deg_ok
+    corr=True
+    for c in range(5):
+        ends=set()
+        for (a,b,cu) in bars:
+            if cu==c+1: ends.add(a); ends.add(b)
+        if ends!=set(C[c]): corr=False
+    r["correspondance_numerotation"]=corr
+    r["bars_1_eq_C0"]=corr and all(a in C[0] and b in C[0] for (a,b,cu) in bars if cu==1)
+    return r
+def valider_aretes_geometriques(V,C,bars):
+    bool_keys=["aretes_longueurs_uniformes","aretes_classification_distances","aretes_biparti",
+    "aretes_sans_triangle","aretes_diametre_3","aretes_comptes_graphes","aretes_geometriques_completes"]
+    def echec(motif):
+        return ({k:False for k in bool_keys},{"motif":motif,"longueur_carree":None,"details_par_cube":[]})
+    try:
+        if len(V)!=20 or len(C)!=5 or len(bars)!=60: return echec("dimensions V/C/bars non conformes")
+        if any(len(C[c])!=8 for c in range(5)): return echec("un cube n'a pas 8 sommets")
+        a0,b0,_=bars[0]; edge_sq=dist_carree_q5(V,a0,b0)
+        if edge_sq==(Fraction(0),Fraction(0)): return echec("longueur carrée de référence nulle")
+        if not q5_is_pos(edge_sq): return echec("longueur carrée de référence non > 0")
+        longueurs_uniformes=True
+        for (a,b,cu) in bars:
+            if dist_carree_q5(V,a,b)!=edge_sq: longueurs_uniformes=False; break
+        if not longueurs_uniformes: return echec("longueurs des barres non uniformes en Q(sqrt5)")
+        deux=q5_scale_int(edge_sq,2); trois=q5_scale_int(edge_sq,3)
+        details=[]; class_ok=True; bip_ok=True; tri_ok=True; diam_ok=True; comptes_ok=True
+        for c in range(5):
+            verts=list(C[c]); bars_c={frozenset((a,b)) for (a,b,cu) in bars if cu==c+1}
+            if len(bars_c)!=12: class_ok=False; details.append({"cube":c+1,"motif":"pas 12 barres distinctes"}); continue
+            n_edge=0; n_face=0; n_space=0; n_inattendu=0; edge_pairs=set()
+            for i in range(len(verts)):
+                for j in range(i+1,len(verts)):
+                    d=dist_carree_q5(V,verts[i],verts[j]); paire=frozenset((verts[i],verts[j]))
+                    if d==edge_sq: n_edge+=1; edge_pairs.add(paire)
+                    elif d==deux: n_face+=1
+                    elif d==trois: n_space+=1
+                    else: n_inattendu+=1
+            if n_inattendu!=0 or n_edge!=12 or n_face!=12 or n_space!=4: class_ok=False
+            if bars_c!=edge_pairs: class_ok=False
+            adj={v:set() for v in verts}
+            for paire in bars_c:
+                x,y=tuple(paire); adj[x].add(y); adj[y].add(x)
+            couleur={}; bip=True
+            for depart in verts:
+                if depart in couleur: continue
+                couleur[depart]=0; pile=[depart]
+                while pile and bip:
+                    u=pile.pop()
+                    for w in adj[u]:
+                        if w not in couleur: couleur[w]=1-couleur[u]; pile.append(w)
+                        elif couleur[w]==couleur[u]: bip=False; break
+            if not bip: bip_ok=False
+            tri=False
+            for i in range(len(verts)):
+                for j in range(i+1,len(verts)):
+                    for k in range(j+1,len(verts)):
+                        if frozenset((verts[i],verts[j])) in bars_c and frozenset((verts[i],verts[k])) in bars_c and frozenset((verts[j],verts[k])) in bars_c: tri=True
+            if tri: tri_ok=False
+            dists={}
+            for s in verts:
+                dist={s:0}; pile=[s]
+                while pile:
+                    u=pile.pop(0)
+                    for w in adj[u]:
+                        if w not in dist: dist[w]=dist[u]+1; pile.append(w)
+                for t in verts:
+                    if t>s: dists[(s,t)]=dist.get(t,None)
+            if any(v is None for v in dists.values()): diam_ok=False; comptes_ok=False
+            else:
+                if max(dists.values())!=3: diam_ok=False
+                c1=sum(1 for v in dists.values() if v==1); c2=sum(1 for v in dists.values() if v==2); c3=sum(1 for v in dists.values() if v==3)
+                if not (c1==12 and c2==12 and c3==4): comptes_ok=False
+            details.append({"cube":c+1,"n_arete_dist":n_edge,"n_face_dist":n_face,"n_espace_dist":n_space,
+            "n_inattendu":n_inattendu,"barres_eq_aretes_geometriques":(bars_c==edge_pairs),
+            "biparti":bip,"sans_triangle":(not tri),
+            "diametre":(max(dists.values()) if dists and all(v is not None for v in dists.values()) else None)})
+        bool_dict={"aretes_longueurs_uniformes":bool(longueurs_uniformes),
+        "aretes_classification_distances":bool(class_ok),"aretes_biparti":bool(bip_ok),
+        "aretes_sans_triangle":bool(tri_ok),"aretes_diametre_3":bool(diam_ok),
+        "aretes_comptes_graphes":bool(comptes_ok),
+        "aretes_geometriques_completes":bool(longueurs_uniformes and class_ok and bip_ok and tri_ok and diam_ok and comptes_ok)}
+        details_dict={"longueur_carree":q5_to_str(edge_sq),"details_par_cube":details,
+        "motif":None if bool_dict["aretes_geometriques_completes"] else "convention d'arêtes non établie pour au moins un cube"}
+        return (bool_dict,details_dict)
+    except Exception as e:
+        return ({k:False for k in bool_keys},{"motif":f"{type(e).name}: {e}","longueur_carree":None,"details_par_cube":[]})
+def accessible_nonempty(idx,vs):
+    if idx is None or len(idx)==0: return (False,"idx vide : aucun mode positif accessible.")
+    for a in idx:
+        if a is None or a<0 or a>=len(vs): return (False,f"indice spectral invalide : {a}.")
+        if all(fiszero(x) for x in vs[a]): return (False,f"mode retenu nul : a={a}.")
+        n2=F0
+        for _i in range(len(vs[a])): n2=fadd(n2,fmul(vs[a][_i],vs[a][_i]))
+        if f_sign_adaptive(n2)!=1: return (False,f"norme du mode retenu non > 0 : a={a}.")
+    return (True,"espace accessible non vide, modes non nuls, normes > 0.")
